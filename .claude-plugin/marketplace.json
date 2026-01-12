@@ -1,12 +1,21 @@
 {
-    "name": "web3-plugins",
-    "owner": {
-        "name": "Monad Foundation",
-        "email": "devrel@monad.foundation",
-        "url": "https://monad.xyz"
-    },
-    "metadata": {
-        "description": "Directory of Claude code web3 plugins including utility plugins and chain specific plugins",
-        "version": "1.0.0"
+  "name": "web3-plugins",
+  "owner": {
+    "name": "Monad Foundation",
+    "email": "devrel@monad.foundation",
+    "url": "https://monad.xyz"
+  },
+  "metadata": {
+    "description": "Directory of Claude Code web3 plugins including utility plugins and chain specific plugins",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "monad-development",
+      "description": "Build dapps on Monad blockchain without friction",
+      "version": "0.1.0",
+      "source": "plugins/monad-development",
+      "category": "development"
     }
+  ]
 }
