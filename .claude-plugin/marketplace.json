@@ -14,7 +14,7 @@
       "name": "monad-development",
       "description": "Build dapps on Monad blockchain without friction",
       "version": "0.1.0",
-      "source": "plugins/monad-development",
+      "source": "./plugins/monad-development",
       "category": "development"
     }
   ]
