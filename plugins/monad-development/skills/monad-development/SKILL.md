@@ -109,7 +109,9 @@ function run() external {
 
 Import from `viem/chains`. Do NOT define custom chain:
 
+```ts
 import { monadTestnet } from "viem/chains";
+```
 
 ## Agent APIs
 
