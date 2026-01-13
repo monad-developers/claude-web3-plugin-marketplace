@@ -24,6 +24,9 @@ For questions not covered here, fetch https://docs.monad.xyz/llms.txt
 > Don't have a keystore? Learn how to create one: https://docs.monad.xyz/guides/deploy-smart-contract/foundry"
 
 **Option 1: Existing Keystore**
+
+> **IMPORTANT:** Never create a keystore on behalf of the user. Keystore creation requires entering a password, which the user must do themselves for security. Only use keystores that already exist.
+
 ```bash
 # List available keystores
 cast wallet list
@@ -34,6 +37,8 @@ forge script script/Deploy.s.sol:DeployScript \
   --account <ACCOUNT_NAME> \
   --broadcast
 ```
+
+If the user doesn't have a keystore and wants to create one, direct them to: https://docs.monad.xyz/guides/deploy-smart-contract/foundry
 
 **Option 2: Temporary Wallet**
 Generate and fund a new wallet:
