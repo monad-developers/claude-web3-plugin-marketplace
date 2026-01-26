@@ -10,8 +10,8 @@ description: Builds dapps on Monad blockchain. Use when deploying contracts, set
 **Correct flow:**
 1. Deploy Safe with DeploySafeCREATE2.sol (Forge script)
 2. Prepare deployment bytecode
-3. Guide user through Safe UI
-4. Collect 2/2 signatures (user + Claude)
+3. Post to Transaction Service API with EIP-712 signature
+4. User signs and executes in Safe UI (2/2 signatures)
 
 **Security rules:**
 - NEVER ask for user's private key (critical violation)
@@ -24,16 +24,95 @@ description: Builds dapps on Monad blockchain. Use when deploying contracts, set
 
 For questions not covered here, fetch https://docs.monad.xyz/llms.txt
 
-## Defaults
+## Quick Reference
 
-- **Network:** Always use **testnet** (chain ID 10143) unless the user explicitly says "mainnet"
-- **Verification:** Always verify contracts after deployment unless the user says not to
+### Defaults
+- **Network:** Always use **testnet** (chain ID 10143) unless user says "mainnet"
+- **Verification:** Always verify contracts after deployment unless user says not to
 - **Framework:** Use Foundry (not Hardhat)
-- **Wallet:** Use Safe multisig for deployments (see Wallet Management)
+- **Wallet:** Use Safe multisig for deployments (see Safe Multisig Setup)
+
+### Networks
+
+| Network | Chain ID | RPC |
+|---------|----------|-----|
+| Testnet | 10143 | https://testnet-rpc.monad.xyz |
+| Mainnet | 143 | https://rpc.monad.xyz |
+
+Docs: https://docs.monad.xyz
+
+### Explorers
+
+| Explorer | Testnet | Mainnet |
+|----------|---------|---------|
+| Socialscan | https://monad-testnet.socialscan.io | https://monad.socialscan.io |
+| MonadVision | https://testnet.monadvision.com | https://monadvision.com |
+| Monadscan | https://testnet.monadscan.com | https://monadscan.com |
+
+### Safe Contract Addresses (Monad Testnet)
+
+```
+Safe Singleton (v1.4.1):  0x3E5c63644E683549055b9Be8653de26E0B4CD36E
+SafeProxyFactory:         0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2
+FallbackHandler:          0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4
+ContractFactory:          0x5f092BaFea57E05b8D4F88a1Ab57d10B43186F47
+```
+
+All contracts verified. Chain ID: 10143. CREATE2 works perfectly on Monad (Prague EVM).
+
+### Agent APIs
+
+**IMPORTANT:** Do NOT use a browser. Use these APIs directly with curl.
+
+**Faucet (Testnet Funding):**
+```bash
+curl -X POST https://agents.devnads.com/v1/faucet \
+  -H "Content-Type: application/json" \
+  -d '{"chainId": 10143, "address": "0xYOUR_ADDRESS"}'
+```
+
+Returns: `{"txHash": "0x...", "amount": "1000000000000000000", "chain": "Monad Testnet"}`
+
+**Verification (All Explorers):**
+
+ALWAYS use the verification API first. It verifies on all 3 explorers (MonadVision, Socialscan, Monadscan) with one call. Do NOT use `forge verify-contract` as first choice.
+
+```bash
+# 1. Get verification data
+forge verify-contract <ADDR> <CONTRACT> \
+  --chain 10143 \
+  --show-standard-json-input > /tmp/standard-input.json
+
+cat out/<Contract>.sol/<Contract>.json | jq '.metadata' > /tmp/metadata.json
+
+# 2. Call verification API
+STANDARD_INPUT=$(cat /tmp/standard-input.json)
+FOUNDRY_METADATA=$(cat /tmp/metadata.json)
+
+cat > /tmp/verify.json << EOF
+{
+  "chainId": 10143,
+  "contractAddress": "0xYOUR_CONTRACT_ADDRESS",
+  "contractName": "src/MyContract.sol:MyContract",
+  "compilerVersion": "v0.8.28+commit.7893614a",
+  "standardJsonInput": $STANDARD_INPUT,
+  "foundryMetadata": $FOUNDRY_METADATA
+}
+EOF
+
+curl -X POST https://agents.devnads.com/v1/verify \
+  -H "Content-Type: application/json" \
+  -d @/tmp/verify.json
+```
+
+**With constructor arguments:** Add `constructorArgs` (ABI-encoded, WITHOUT 0x prefix):
+```bash
+ARGS=$(cast abi-encode "constructor(string,string,uint256)" "MyToken" "MTK" 1000000000000000000000000)
+ARGS_NO_PREFIX=${ARGS#0x}
+# Add to request: "constructorArgs": "$ARGS_NO_PREFIX"
+```
 
 ## Claude's Behavior: Be Proactive
-
-**When user requests deployment:**
 
 ✅ **DO:**
 - Check for existing `claude-monad` keystore first with `cast wallet list`
@@ -41,19 +120,18 @@ For questions not covered here, fetch https://docs.monad.xyz/llms.txt
 - Say "I'll set up a 2-of-3 Safe for us"
 - Take charge of the process
 - Ask for wallet addresses directly
-- **Deploy Safe programmatically with DeploySafeCREATE2.sol** - use Forge script (this works reliably)
-- **Automatically fund Claude's keystore wallet** from testnet faucet (no user action needed)
+- Deploy Safe programmatically with DeploySafeCREATE2.sol (Forge script)
+- Automatically fund Claude's keystore wallet from testnet faucet
 - **NEVER ask for user's private key**
-- Deploy Safe with 3 owners and threshold of 2 using Claude's keystore
+- Deploy Safe with 3 owners and threshold of 2
 - Return the Safe address automatically
-- **Use Transaction Service API** - post transaction with EIP-712 signature so it appears in Safe UI queue
-- **Store auto-generated password in `~/.monad-keystore-password`** with restricted permissions (chmod 600)
-- **Use `--password-file` parameter** when signing operations need Claude's private key
-- Verify everything works
+- Use Transaction Service API with EIP-712 signatures
+- Store auto-generated password in `~/.monad-keystore-password` with chmod 600
+- Use `--password-file` when signing operations need Claude's private key
+- Post transactions to Safe UI queue so user can sign/execute
 
 ❌ **DON'T:**
-- Ask "Do you have a Safe?"
-- Ask "Would you like me to guide you?"
+- Ask "Do you have a Safe?" or "Would you like me to guide you?"
 - Put burden on user to figure out steps
 - Be passive or hesitant
 - Wait for user to create things first
@@ -61,7 +139,7 @@ For questions not covered here, fetch https://docs.monad.xyz/llms.txt
 - **NEVER use `cast send` to deploy contracts**
 - **NEVER skip Safe multisig setup, even if there are keystore issues**
 - **NEVER take the "easy path" of direct deployment**
-- **NEVER EVER ask for user's private key - this is a critical security violation**
+- **NEVER EVER ask for user's private key - critical security violation**
 
 **Example interaction:**
 ```
@@ -91,171 +169,187 @@ Claude: [Funds wallet from faucet automatically]
 "✅ Safe deployed: 0xSAFE123...
  🌐 https://app.safe.global/home?safe=monad-testnet:0xSAFE123
 
-[Prepares ERC20 deployment bytecode and encodes factory call]
+[Prepares deployment, posts to Transaction Service API with EIP-712 signature]
 
-✅ Factory call data saved to: factory-call.txt
+✅ Transaction posted to Safe UI queue!
 
-To deploy through Safe:
-1. Open Safe UI (link above)
-2. New Transaction → Transaction Builder
-3. Enable 'Custom data' toggle (top right)
-4. Enter Address: 0x5f092BaFea57E05b8D4F88a1Ab57d10B43186F47 (ContractFactory)
-5. Leave ABI empty
-6. Transaction information:
-   - To Address: (auto-filled)
-   - MON value: 0
-   - Data (Hex encoded): [paste from factory-call.txt - this calls deploySimple()]
-7. Add new transaction → Sign → Execute (need 2/2 signatures)"
+User can now:
+1. Open: https://app.safe.global/transactions/queue?safe=monad-testnet:0xSAFE123
+2. See pending transaction (Claude already signed 1/2)
+3. Sign with their wallet (2/2)
+4. Execute to deploy"
 ```
 
-❌ **DON'T:** Ask "Do you have a Safe?", deploy directly with `--broadcast`
+## Safe Multisig Setup
 
-## Wallet Management
+**Status:** Safe v1.4.1 works perfectly on Monad with full CREATE2 support (as of Jan 26, 2026).
 
-**Safe Multisig for AI-Assisted Deployments**
+### Security Model
 
 This skill uses a 2-of-3 Safe multisig wallet for secure AI-assisted deployments. Claude can propose and sign transactions (1 of 2 required signatures), but you must approve with your wallet to execute. This ensures AI-assisted deployments require human authorization.
 
-### How It Works
+**How it works:**
+1. Claude generates signing wallet (Owner 3) using encrypted keystore
+2. User provides two wallet addresses (Owners 1 & 2)
+3. Claude deploys 2-of-3 Safe with CREATE2
+4. Claude proposes and signs deployments (1/2 signatures)
+5. User approves in Safe UI (2/2 signatures)
+6. Claude monitors execution and extracts contract address
 
-1. **I'll set up a 2-of-3 Safe** with you for secure deployments
-2. **I'll generate my signing wallet** (Owner 3) using `cast wallet new`
-3. **I'll guide you** to create the Safe at app.safe.global with:
-   - Your mobile wallet (Owner 1) - for easy approval
-   - Your desktop wallet (Owner 2) - for backup
-   - My wallet (Owner 3) - for signing proposals
-4. **I'll propose and sign** deployments (1/2 signatures)
-5. **You approve** in Safe mobile app (2/2 signatures)
-6. **I'll monitor** for execution and extract the contract address
+> **SECURITY:** The 2-of-3 Safe gives Claude signing capability (1 of 2 required) but prevents autonomous execution. You maintain final approval authority - transactions cannot execute without your signature. You control 2/3 owners, so your funds stay safe even if Claude's keystore is compromised.
 
-> **SECURITY MODEL:** The 2-of-3 Safe gives Claude signing capability (1 of 2 required) but prevents autonomous execution. You maintain final approval authority - transactions cannot execute without your signature. This creates secure AI-human collaboration where Claude handles technical preparation and signing while you maintain authorization control.
+### Step A: Generate Keystore Wallet
 
-### How I'll Set Up the Safe for You
+When you request a deployment, Claude will:
 
-When you request a deployment, I'll:
+```bash
+# Check if claude-monad exists
+if ! cast wallet list | grep -q "claude-monad"; then
+  # Generate wallet
+  WALLET_OUTPUT=$(cast wallet new)
+  ADDRESS=$(echo "$WALLET_OUTPUT" | grep "Address:" | awk '{print $2}')
+  PRIVATE_KEY=$(echo "$WALLET_OUTPUT" | grep "Private key:" | awk '{print $3}')
 
-1. **Check for my existing wallet** in Foundry keystore (`claude-monad`)
-2. **Check if you have a Safe** by asking for your Safe address
-3. **If you don't have one**, I'll set it up:
+  # Generate and save password
+  openssl rand -base64 32 > ~/.monad-keystore-password
+  chmod 600 ~/.monad-keystore-password
 
-   **Step A: Generate and import wallet to keystore**
-   ```bash
-   # Check if claude-monad exists
-   if ! cast wallet list | grep -q "claude-monad"; then
-     # Generate wallet
-     WALLET_OUTPUT=$(cast wallet new)
-     ADDRESS=$(echo "$WALLET_OUTPUT" | grep "Address:" | awk '{print $2}')
-     PRIVATE_KEY=$(echo "$WALLET_OUTPUT" | grep "Private key:" | awk '{print $3}')
+  # Import to keystore
+  cast wallet import claude-monad \
+    --private-key "$PRIVATE_KEY" \
+    --unsafe-password "$(cat ~/.monad-keystore-password)"
 
-     # Generate and save password
-     openssl rand -base64 32 > ~/.monad-keystore-password
-     chmod 600 ~/.monad-keystore-password
+  echo "✅ Created Claude's signing wallet: $ADDRESS"
+  echo "   • Encrypted keystore: ~/.foundry/keystores/claude-monad"
+  echo "   • Password: ~/.monad-keystore-password (auto-generated)"
+  echo "   • You control 2/3 owners - your funds stay safe"
+fi
 
-     # Import to keystore
-     cast wallet import claude-monad \
-       --private-key "$PRIVATE_KEY" \
-       --unsafe-password "$(cat ~/.monad-keystore-password)"
+CLAUDE_ADDRESS=$(cast wallet address --account claude-monad --password-file ~/.monad-keystore-password)
+```
 
-     # Show disclaimer (wallet address, encryption, security model)
-     echo "✅ Created Claude's signing wallet: $ADDRESS"
-   fi
+**Security:** Password stored at `~/.monad-keystore-password` with chmod 600. Keystore encrypted on disk. 2-of-3 multisig provides defense in depth.
 
-   CLAUDE_ADDRESS=$(cast wallet address --account claude-monad --password-file ~/.monad-keystore-password)
-   ```
+### Step B: Get User Wallets
 
-   Claude will show a disclaimer explaining the wallet, encryption (`~/.foundry/keystores/claude-monad`), and security model (you control 2/3 owners).
+Claude asks: "Please provide your two wallet addresses:
+- Wallet 1 (recommended: Safe mobile app for easy approvals)
+- Wallet 2 (recommended: desktop/hardware wallet for backup)"
 
-   **Step B: I ask for your wallets**
-   I'll ask: "Please provide your two wallet addresses:
-   - Wallet 1 (recommended: Safe mobile app for easy approvals)
-   - Wallet 2 (recommended: desktop/hardware wallet for backup)"
+### Step C: Deploy Safe with CREATE2
 
-   **Step C: Fund wallet and deploy Safe**
+```bash
+# Fund Claude's wallet from faucet
+FAUCET_RESPONSE=$(curl -s -X POST https://agents.devnads.com/v1/faucet \
+  -H "Content-Type: application/json" \
+  -d "{\"chainId\": 10143, \"address\": \"$CLAUDE_ADDRESS\"}")
 
-   I'll automatically fund Claude's wallet from the faucet, then deploy the Safe with Forge:
+# Wait for funds
+while [ "$(cast balance $CLAUDE_ADDRESS --rpc-url https://testnet-rpc.monad.xyz)" = "0" ]; do
+  sleep 2
+done
 
-   ```bash
-   # Fund Claude's wallet from faucet
-   FAUCET_RESPONSE=$(curl -s -X POST https://agents.devnads.com/v1/faucet \
-     -H "Content-Type: application/json" \
-     -d "{\"chainId\": 10143, \"address\": \"$CLAUDE_ADDRESS\"}")
+# Deploy Safe with CREATE2 (standard SafeProxyFactory)
+OWNER_1=$OWNER_1 OWNER_2=$OWNER_2 OWNER_3=$CLAUDE_ADDRESS \
+  forge script DeploySafeCREATE2.sol:DeploySafeCREATE2 \
+    --account claude-monad \
+    --password-file ~/.monad-keystore-password \
+    --rpc-url https://testnet-rpc.monad.xyz \
+    --broadcast
 
-   # Wait for funds (poll with `cast balance` until non-zero)
-   while [ "$(cast balance $CLAUDE_ADDRESS --rpc-url https://testnet-rpc.monad.xyz)" = "0" ]; do
-     sleep 2
-   done
+echo "✅ Safe deployed: $SAFE_ADDRESS"
+echo "🌐 https://app.safe.global/home?safe=monad-testnet:$SAFE_ADDRESS"
+```
 
-   # Deploy Safe with CREATE2 (standard SafeProxyFactory)
-   OWNER_1=$OWNER_1 OWNER_2=$OWNER_2 OWNER_3=$CLAUDE_ADDRESS \
-     forge script DeploySafeCREATE2.sol:DeploySafeCREATE2 \
-       --account claude-monad \
-       --password-file ~/.monad-keystore-password \
-       --rpc-url https://testnet-rpc.monad.xyz \
-       --broadcast
+**DeploySafeCREATE2.sol script:**
 
-   # Extract Safe address
-   SAFE_ADDRESS=$(forge script DeploySafeCREATE2.sol:DeploySafeCREATE2 --sig "run()" | grep "Safe deployed at:" | awk '{print $NF}')
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+import "forge-std/Script.sol";
 
-   echo "✅ Safe deployed: $SAFE_ADDRESS"
-   echo "🌐 https://app.safe.global/home?safe=monad-testnet:$SAFE_ADDRESS"
-   ```
+interface ISafe {
+    function setup(
+        address[] calldata _owners,
+        uint256 _threshold,
+        address to,
+        bytes calldata data,
+        address fallbackHandler,
+        address paymentToken,
+        uint256 payment,
+        address payable paymentReceiver
+    ) external;
+}
 
-   **Step D: Proceed with deployment**
-   - Prepare contract deployment bytecode
-   - Save to file for Safe UI
-   - Guide you through Safe transaction creation
-   - Sign with your wallet (1/2), Claude signs (2/2)
+interface ISafeProxyFactory {
+    function createProxyWithNonce(
+        address _singleton,
+        bytes memory initializer,
+        uint256 saltNonce
+    ) external returns (address);
+}
 
-### What I'll Handle for You
+contract DeploySafeCREATE2 is Script {
+    address constant SAFE_SINGLETON = 0x3E5c63644E683549055b9Be8653de26E0B4CD36E;
+    address constant SAFE_PROXY_FACTORY = 0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2;
+    address constant FALLBACK_HANDLER = 0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4;
 
-**First deployment:**
-- ✅ Generate Claude's wallet → encrypted keystore (`claude-monad`)
-- ✅ Auto-generate password → `~/.monad-keystore-password` (chmod 600)
-- ✅ Fund wallet from faucet automatically
-- ✅ Deploy Safe with DeploySafeCREATE2.sol (3 owners, 2/3 threshold)
-- ✅ Prepare deployment bytecode → save to file
-- ✅ Guide you through Safe UI transaction creation
+    function run() external returns (address) {
+        address owner1 = vm.envAddress("OWNER_1");
+        address owner2 = vm.envAddress("OWNER_2");
+        address owner3 = vm.envAddress("OWNER_3");
 
-**Subsequent deployments:**
-- ✅ Use existing `claude-monad` keystore + password
-- ✅ Ask for Safe address (or reuse from session)
-- ✅ Prepare bytecode → guide through Safe UI
-- ✅ Sign with your wallet (1/2), Claude signs (2/2)
+        address[] memory owners = new address[](3);
+        owners[0] = owner1;
+        owners[1] = owner2;
+        owners[2] = owner3;
 
-**You provide:**
-- Two wallet addresses (public, safe to share)
-- Approval in Safe app for each deployment
+        bytes memory initializer = abi.encodeWithSelector(
+            ISafe.setup.selector,
+            owners,              // _owners
+            2,                   // _threshold (2 of 3)
+            address(0),          // to
+            "",                  // data
+            FALLBACK_HANDLER,    // fallbackHandler
+            address(0),          // paymentToken
+            0,                   // payment
+            payable(0)           // paymentReceiver
+        );
 
-**You never provide:**
-- ❌ Your private key (critical security violation)
-- ❌ Passwords (auto-generated)
+        vm.startBroadcast();
 
-**System requirements:**
-- Foundry (forge, cast)
+        address proxy = ISafeProxyFactory(SAFE_PROXY_FACTORY).createProxyWithNonce(
+            SAFE_SINGLETON,
+            initializer,
+            block.timestamp
+        );
 
-### Recovery: If Keystore Lost
+        console.log("Safe deployed at:", proxy);
+        console.log("Access: https://app.safe.global/home?safe=monad-testnet:", proxy);
 
-If keystore is corrupted or password lost:
+        vm.stopBroadcast();
+        return proxy;
+    }
+}
+```
 
-1. Delete old files: `rm ~/.foundry/keystores/claude-monad ~/.monad-keystore-password`
-2. Generate new wallet → import to keystore
-3. Update Safe: Remove old Owner 3, add new Owner 3 (keep your 2 wallets)
+**Why CREATE2 is preferred:**
+- ✅ Standard Safe deployment method
+- ✅ Automatically indexed by Transaction Service
+- ✅ Appears in Safe UI without manual URL entry
+- ✅ Deterministic addresses
+- ✅ Full ecosystem compatibility
 
-Your funds stay safe - you control 2/3 owners and can execute with just your wallets.
-
-### ContractFactory: Required for Contract Deployments
+### Step D: ContractFactory - Required for Deployments
 
 **CRITICAL:** Safe wallets cannot directly CREATE contracts. When you send a transaction to `0x0000...0000`, it's a regular CALL, not a CREATE operation. To deploy contracts through Safe, you must use a factory contract.
 
-**ContractFactory deployed on Monad Testnet:**
-```
-Address: 0x5f092BaFea57E05b8D4F88a1Ab57d10B43186F47
-```
+**ContractFactory on Monad Testnet:** `0x5f092BaFea57E05b8D4F88a1Ab57d10B43186F47`
 
 **Why it's needed:**
 - Safe executes transactions via CALL opcode (not CREATE)
 - Sending bytecode to `0x0000...0000` doesn't deploy anything
-- Factory provides `deploySimple(bytes)` function that uses CREATE internally
+- Factory provides `deploySimple(bytes)` that uses CREATE internally
 - Safe calls the factory, factory creates the contract
 
 **Factory interface:**
@@ -273,20 +367,24 @@ contract ContractFactory {
 }
 ```
 
-**How to use:**
-1. Prepare your contract deployment bytecode (e.g., `0x608060...`)
-2. Encode factory call: `factory.deploySimple(bytecode)`
-3. Safe calls factory with encoded data
-4. Factory deploys contract and returns address
+### Recovery
 
-### Workflow
+If keystore is corrupted or password lost:
 
-**IMPORTANT: This workflow uses Safe multisig for ALL deployments. Direct deployment with `--private-key` or `--broadcast` is NOT allowed.**
+1. Delete old files: `rm ~/.foundry/keystores/claude-monad ~/.monad-keystore-password`
+2. Generate new wallet → import to keystore (see Step A)
+3. Update Safe: Remove old Owner 3, add new Owner 3 (keep your 2 wallets)
 
-**DEPLOYMENT APPROACH:**
-1. ✅ Deploy Safe with DeploySafeCREATE2.sol (CREATE2 via SafeProxyFactory)
+Your funds stay safe - you control 2/3 owners and can execute with just your wallets.
+
+## Deployment Workflow
+
+**IMPORTANT:** This workflow uses Safe multisig for ALL deployments. Direct deployment with `--private-key` or `--broadcast` is NOT allowed.
+
+**Approach:**
+1. ✅ Deploy Safe with DeploySafeCREATE2.sol
 2. ✅ Prepare deployment bytecode and encode factory call
-3. ✅ Post transaction to Transaction Service API with Claude's EIP-712 signature
+3. ✅ Post to Transaction Service API with Claude's EIP-712 signature
 4. ✅ User sees transaction in Safe UI queue, signs (2/2), executes
 
 **Why this works:**
@@ -294,11 +392,10 @@ contract ContractFactory {
 - ✅ No manual bytecode copying needed
 - ✅ User just signs and executes in familiar UI
 - ✅ Transaction Service API works perfectly on Monad with EIP-712 signatures
-- ✅ Tested and confirmed working (returns 201 Created)
 
-#### Step 1: Prepare Deployment Transaction
+### Step 1: Prepare Deployment Transaction
 
-Use `forge script` with `--sender` set to the Safe address (NOT with --private-key):
+Use `forge script` with `--sender` set to the Safe address:
 
 ```bash
 forge script script/Deploy.s.sol:DeployScript \
@@ -306,48 +403,27 @@ forge script script/Deploy.s.sol:DeployScript \
   --sender <SAFE_ADDRESS>
 ```
 
-This simulates the deployment from the Safe wallet and generates transaction data without broadcasting. The `--sender` flag tells Foundry to prepare the transaction as if it's coming from the Safe address.
+This simulates the deployment from the Safe wallet without broadcasting.
 
-#### Step 2: Extract Deployment Bytecode
-
-Extract the deployment bytecode from the forge script output:
+### Step 2: Extract Deployment Bytecode
 
 ```bash
+# Extract deployment bytecode
 DEPLOYMENT_BYTECODE=$(jq -r '.transactions[0].transaction.input' \
   broadcast/Deploy.s.sol/10143/dry-run/run-latest.json)
-```
 
-Ensure the Safe address is checksummed:
-
-```bash
+# Ensure Safe address is checksummed
 SAFE_ADDRESS=$(cast to-check-sum-address "<SAFE_ADDRESS>")
-```
 
-Extract Claude's private key from encrypted keystore:
-
-```bash
-# Keystore and password file locations
+# Verify keystore is accessible
 KEYSTORE_PATH="$HOME/.foundry/keystores/claude-monad"
 PASSWORD_FILE="$HOME/.monad-keystore-password"
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔐 Claude signing the deployment proposal (1/2 signatures)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-
-# Check password file exists
 if [ ! -f "$PASSWORD_FILE" ]; then
   echo "❌ Error: Password file not found at $PASSWORD_FILE"
-  echo "Run keystore setup again to regenerate"
   exit 1
 fi
 
-# Read password from file
-KEYSTORE_PASSWORD=$(cat "$PASSWORD_FILE")
-
-# Get private key using cast wallet address with password (doesn't expose private key)
-# We'll use the password-file parameter in Safe SDK instead
-# For verification, just check keystore is accessible
 if ! cast wallet address --account claude-monad --password-file "$PASSWORD_FILE" > /dev/null 2>&1; then
   echo "❌ Error: Failed to access keystore. Keystore may be corrupted."
   exit 1
@@ -356,23 +432,17 @@ fi
 echo "✅ Keystore accessible"
 ```
 
-> **SECURITY:** The password is stored at `~/.monad-keystore-password` with chmod 600 (user-only access). The keystore is encrypted on disk. The 2-of-3 multisig provides defense in depth - even if the password file is compromised, an attacker needs 2/3 signatures to execute transactions.
+### Step 3: Post to Transaction Service API
 
-#### Step 3: Execute Transaction Through Safe
+**CRITICAL:** Must use EIP-712 signatures (not raw signatures). The Transaction Service API works perfectly on Monad when using proper EIP-712 format.
 
-Use the Transaction Service API with EIP-712 signatures for the best user experience:
-
-**Transaction appears in Safe UI automatically for user to sign and execute**
-
-⚠️ **CRITICAL:** Must use EIP-712 signatures (not raw signatures from `cast wallet sign`). The Transaction Service API works perfectly on Monad when using proper EIP-712 format.
-
-**Create proposal script:**
+**Create propose.mjs:**
 
 ```bash
-# Install dependencies if needed
+# Install dependencies
 npm install --no-save ethers@^6.0.0
 
-# Create propose.mjs
+# Create proposal script
 cat > propose.mjs << 'EOF'
 import { ethers } from 'ethers';
 import fs from 'fs';
@@ -515,217 +585,16 @@ User can now:
 4. Execute to deploy
 ```
 
-#### Step 4: Monitor and Get Contract Address
+### Step 4: Monitor and Get Contract Address
 
-After user executes the transaction in Safe UI, get the contract address:
+After user executes the transaction in Safe UI:
 
 ```bash
-# User tells you the transaction hash after execution
+# User provides transaction hash after execution
 cast receipt <TRANSACTION_HASH> --rpc-url https://testnet-rpc.monad.xyz
 ```
 
 Look for the `contractAddress` field in the receipt.
-
----
-
-## ✅ Safe Multisig on Monad - Working Solution
-
-**Status**: Safe v1.4.1 WORKS PERFECTLY on Monad with full CREATE2 support (as of Jan 26, 2026)
-
-### ✅ CREATE2 Works on Monad
-
-**Previous incorrect claim:** "SafeProxyFactory (CREATE2) fails on Monad"
-**Reality:** CREATE2 works flawlessly on Monad's Prague EVM implementation.
-
-**Use the standard SafeProxyFactory deployment method:**
-- ✅ CREATE2 fully supported
-- ✅ Transaction Service API functional (correct endpoint)
-- ✅ Safe UI integration works
-- ✅ Safes are properly indexed
-
-### Official Safe Contract Addresses (Monad Testnet)
-
-```solidity
-Safe Singleton (v1.4.1):  0x3E5c63644E683549055b9Be8653de26E0B4CD36E
-SafeProxyFactory:         0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2
-FallbackHandler:          0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4
-ContractFactory:          0x5f092BaFea57E05b8D4F88a1Ab57d10B43186F47  (for contract deployments)
-```
-
-All contracts verified and functional. Chain ID: 10143
-
-### How It Works
-
-1. **Deploy Safe with CREATE2** (SafeProxyFactory) - standard approach
-2. **Safe appears in Transaction Service** automatically
-3. **Prepare contract deployment bytecode**
-4. **Use Safe web UI** to create and sign transactions
-5. **Full 2-of-3 multisig functionality** - all features work
-
-### Step 1: Deploy Safe with CREATE2 (Recommended)
-
-Create `DeploySafeCREATE2.sol` in your project:
-
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
-import "forge-std/Script.sol";
-
-interface ISafe {
-    function setup(
-        address[] calldata _owners,
-        uint256 _threshold,
-        address to,
-        bytes calldata data,
-        address fallbackHandler,
-        address paymentToken,
-        uint256 payment,
-        address payable paymentReceiver
-    ) external;
-}
-
-interface ISafeProxyFactory {
-    function createProxyWithNonce(
-        address _singleton,
-        bytes memory initializer,
-        uint256 saltNonce
-    ) external returns (address);
-}
-
-contract DeploySafeCREATE2 is Script {
-    address constant SAFE_SINGLETON = 0x3E5c63644E683549055b9Be8653de26E0B4CD36E;
-    address constant SAFE_PROXY_FACTORY = 0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2;
-    address constant FALLBACK_HANDLER = 0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4;
-
-    function run() external returns (address) {
-        address owner1 = vm.envAddress("OWNER_1");
-        address owner2 = vm.envAddress("OWNER_2");
-        address owner3 = vm.envAddress("OWNER_3");
-
-        address[] memory owners = new address[](3);
-        owners[0] = owner1;
-        owners[1] = owner2;
-        owners[2] = owner3;
-
-        // Prepare initializer data for Safe setup
-        bytes memory initializer = abi.encodeWithSelector(
-            ISafe.setup.selector,
-            owners,              // _owners
-            2,                   // _threshold (2 of 3)
-            address(0),          // to
-            "",                  // data
-            FALLBACK_HANDLER,    // fallbackHandler
-            address(0),          // paymentToken
-            0,                   // payment
-            payable(0)           // paymentReceiver
-        );
-
-        vm.startBroadcast();
-
-        // Deploy Safe using CREATE2 via SafeProxyFactory
-        address proxy = ISafeProxyFactory(SAFE_PROXY_FACTORY).createProxyWithNonce(
-            SAFE_SINGLETON,
-            initializer,
-            block.timestamp  // Use timestamp as salt for unique address
-        );
-
-        console.log("Safe deployed at:", proxy);
-        console.log("Access: https://app.safe.global/home?safe=monad-testnet:", proxy);
-        console.log("Transaction Service: https://api.safe.global/tx-service/monad-testnet/api/v1/safes/", proxy);
-
-        vm.stopBroadcast();
-        return proxy;
-    }
-}
-```
-
-**Deploy with:**
-```bash
-# Set owner addresses
-export OWNER_1="0xUserWallet1"
-export OWNER_2="0xUserWallet2"
-export OWNER_3="$(cast wallet address --account claude-monad --password-file ~/.monad-keystore-password)"
-
-# Deploy Safe using CREATE2
-forge script DeploySafeCREATE2.sol:DeploySafeCREATE2 \
-  --account claude-monad \
-  --password-file ~/.monad-keystore-password \
-  --rpc-url https://testnet-rpc.monad.xyz \
-  --broadcast
-
-# Verify Safe is indexed by Transaction Service
-SAFE_ADDRESS="<address from output>"
-curl "https://api.safe.global/tx-service/monad-testnet/api/v1/safes/${SAFE_ADDRESS}/" | jq .
-```
-
-**Why CREATE2 is preferred:**
-- ✅ Standard Safe deployment method
-- ✅ Automatically indexed by Transaction Service
-- ✅ Appears in Safe UI without manual URL entry
-- ✅ Deterministic addresses (can predict before deployment)
-- ✅ Full ecosystem compatibility
-```
-
-### Step 2: Prepare Contract Deployment Bytecode
-
-For any contract you want to deploy through the Safe:
-
-```bash
-# Build your contract first
-forge build
-
-# Extract deployment bytecode
-BYTECODE=$(jq -r '.bytecode.object' out/YourContract.sol/YourContract.json)
-
-# Ensure it starts with 0x
-if [[ ! "$BYTECODE" =~ ^0x ]]; then
-  BYTECODE="0x$BYTECODE"
-fi
-
-# ContractFactory address on Monad Testnet
-FACTORY_ADDRESS="0x5f092BaFea57E05b8D4F88a1Ab57d10B43186F47"
-
-# Encode factory call: factory.deploySimple(bytecode)
-# This is what Safe will actually call
-FACTORY_CALL=$(cast calldata "deploySimple(bytes)" "$BYTECODE")
-
-# Save to file for Safe UI
-echo "$FACTORY_CALL" > factory-call.txt
-echo "✅ Factory call data saved (${#FACTORY_CALL} characters)"
-echo "   Safe will call: ContractFactory.deploySimple()"
-```
-
-### Step 3: Deploy Through Safe Web UI
-
-**Give user the Safe URL:**
-```
-https://app.safe.global/home?safe=monad-testnet:{SAFE_ADDRESS}
-```
-
-**Guide user through UI (step-by-step):**
-
-1. **Open Safe** - Click the Safe URL
-2. **New Transaction** - Click "New transaction" button
-3. **Transaction Builder** - Select "Transaction Builder"
-4. **Enable Custom data** - Toggle "Custom data" at the top (should turn green)
-5. **Enter Address or ENS Name:**
-   - Enter: `0x5f092BaFea57E05b8D4F88a1Ab57d10B43186F47` (ContractFactory)
-6. **Enter ABI** - Leave empty (we're using custom data)
-7. **Transaction information:**
-   - **To Address**: Will auto-populate with the factory address above
-   - **MON value**: Enter `0` (no ETH/MON being sent)
-   - **Data (Hex encoded)**: Paste factory call data from `factory-call.txt`
-     - **IMPORTANT**: Data must start with `0x` (if your file doesn't have it, add it)
-     - Example: `0x7cb647590000000000000000000000000000...` (calls deploySimple())
-8. **Add new transaction** - Click "Add new transaction" button
-9. **Review and sign** - Review the transaction details, then sign with your MetaMask
-10. **Execute** - After collecting 2/2 signatures, execute to deploy contract
-
-**Note on signatures:**
-- The Safe is 2-of-3, so you need 2 signatures
-- You provide 1 signature (your wallet) when creating the transaction
-- For the 2nd signature, you'll need another owner to sign (either your other wallet or have Claude sign)
-- Once 2/2 signatures collected, the "Execute" button becomes available
 
 ### What Works & Limitations
 
@@ -742,17 +611,19 @@ https://app.safe.global/home?safe=monad-testnet:{SAFE_ADDRESS}
 | Raw signatures with `cast wallet sign` | ❌ Wrong format (use EIP-712) |
 
 **Key Points:**
-- ✅ **CREATE2 works perfectly** on Monad (Prague EVM)
-- ✅ Transaction Service API fully functional at: `https://api.safe.global/tx-service/monad-testnet/`
+- ✅ CREATE2 works perfectly on Monad (Prague EVM)
+- ✅ Transaction Service API fully functional
 - ✅ Safes deployed with CREATE2 are automatically indexed
-- ✅ **Programmatic API proposals work with EIP-712 signatures** (use `wallet.signTypedData()`)
-- ❌ Raw signatures from `cast wallet sign` don't work (wrong format)
+- ✅ Programmatic API proposals work with EIP-712 signatures
+- ❌ Raw signatures from `cast wallet sign` don't work
 - ✅ All Safe features work as expected
 
 **After deployment, ALWAYS tell the user:**
 > "Deployment successful! Contract deployed from Safe multisig at [CONTRACT_ADDRESS]. The 2-of-3 setup ensures collaborative control - deployments require 2 signatures. View on explorer: [EXPLORER_URL]"
 
-## EVM Version (Critical)
+## Technical Details
+
+### EVM Version (Critical)
 
 Always set `evmVersion: "prague"`. Requires Solidity 0.8.27+.
 
@@ -763,24 +634,7 @@ evm_version = "prague"
 solc_version = "0.8.28"
 ```
 
-## Networks
-
-| Network | Chain ID | RPC |
-|---------|----------|-----|
-| Testnet | 10143 | https://testnet-rpc.monad.xyz |
-| Mainnet | 143 | https://rpc.monad.xyz |
-
-Docs: https://docs.monad.xyz
-
-## Explorers
-
-| Explorer | Testnet | Mainnet |
-|----------|---------|---------|
-| Socialscan | https://monad-testnet.socialscan.io | https://monad.socialscan.io |
-| MonadVision | https://testnet.monadvision.com | https://monadvision.com |
-| Monadscan | https://testnet.monadscan.com | https://monadscan.com |
-
-## Foundry Tips
+### Foundry Tips
 
 **Flags that don't exist (don't use):**
 - `--no-commit` - not a valid flag for `forge init` or `forge install`
@@ -812,91 +666,10 @@ function run() external {
 }
 ```
 
-## Frontend
+### Frontend
 
 Import from `viem/chains`. Do NOT define custom chain:
 
 ```ts
 import { monadTestnet } from "viem/chains";
 ```
-
-## Agent APIs
-
-**IMPORTANT:** Do NOT use a browser or visit any website. Use these APIs directly with curl.
-
-### Faucet (Testnet Funding)
-
-```bash
-curl -X POST https://agents.devnads.com/v1/faucet \
-  -H "Content-Type: application/json" \
-  -d '{"chainId": 10143, "address": "0xYOUR_ADDRESS"}'
-```
-
-Returns: `{"txHash": "0x...", "amount": "1000000000000000000", "chain": "Monad Testnet"}`
-
-### Verification (All Explorers)
-
-**ALWAYS use the verification API.** It verifies on all 3 explorers (MonadVision, Socialscan, Monadscan) with one call. Do NOT use `forge verify-contract` as your first choice.
-
-#### Step 1: Get Verification Data
-
-After deploying, get two pieces of data:
-
-```bash
-# 1. Standard JSON input (all source files)
-forge verify-contract <ADDR> <CONTRACT> \
-  --chain 10143 \
-  --show-standard-json-input > /tmp/standard-input.json
-
-# 2. Foundry metadata (from compilation output)
-cat out/<Contract>.sol/<Contract>.json | jq '.metadata' > /tmp/metadata.json
-```
-
-#### Step 2: Call Verification API
-
-```bash
-STANDARD_INPUT=$(cat /tmp/standard-input.json)
-FOUNDRY_METADATA=$(cat /tmp/metadata.json)
-
-cat > /tmp/verify.json << EOF
-{
-  "chainId": 10143,
-  "contractAddress": "0xYOUR_CONTRACT_ADDRESS",
-  "contractName": "src/MyContract.sol:MyContract",
-  "compilerVersion": "v0.8.28+commit.7893614a",
-  "standardJsonInput": $STANDARD_INPUT,
-  "foundryMetadata": $FOUNDRY_METADATA
-}
-EOF
-
-curl -X POST https://agents.devnads.com/v1/verify \
-  -H "Content-Type: application/json" \
-  -d @/tmp/verify.json
-```
-
-#### With Constructor Arguments
-
-Add `constructorArgs` (ABI-encoded, WITHOUT 0x prefix):
-
-```bash
-# Get constructor args
-ARGS=$(cast abi-encode "constructor(string,string,uint256)" "MyToken" "MTK" 1000000000000000000000000)
-# Remove 0x prefix
-ARGS_NO_PREFIX=${ARGS#0x}
-
-# Add to request
-"constructorArgs": "$ARGS_NO_PREFIX"
-```
-
-#### Parameters
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `chainId` | Yes | 10143 (testnet) or 143 (mainnet) |
-| `contractAddress` | Yes | Deployed contract address |
-| `contractName` | Yes | Format: `path/File.sol:ContractName` |
-| `compilerVersion` | Yes | e.g., `v0.8.28+commit.7893614a` |
-| `standardJsonInput` | Yes | From `forge verify-contract --show-standard-json-input` |
-| `foundryMetadata` | Yes | From `out/<Contract>.sol/<Contract>.json > .metadata` |
-| `constructorArgs` | No | ABI-encoded args WITHOUT 0x prefix |
-
